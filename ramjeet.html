@@ -1,0 +1,410 @@
+import { useState, useEffect, useRef } from "react";
+
+const CREATOR = "Ramjeet";
+const STORAGE_KEY = "sharezone-ramjeet-files";
+
+const styles = `
+  @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;600;700;800&family=Hind:wght@400;500;600&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-7px)} }
+  .fade-in { animation: fadeIn 0.35s ease forwards; }
+  .card-hover { transition: transform 0.18s, box-shadow 0.18s; cursor: pointer; }
+  .card-hover:hover { transform: translateY(-3px); box-shadow: 0 10px 36px rgba(255,140,0,0.18); }
+  .btn { border: none; cursor: pointer; font-family: 'Baloo 2', sans-serif; font-weight: 700; transition: all 0.18s; }
+  .btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0px); }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: #0d0800; }
+  ::-webkit-scrollbar-thumb { background: #ff8c00; border-radius: 4px; }
+`;
+
+function formatSize(bytes) {
+  if (!bytes) return "";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function formatTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function TypeIcon({ type, size = 26 }) {
+  const s = { fontSize: size };
+  if (type === "text/note") return <span style={s}>📝</span>;
+  if (type.startsWith("image/")) return <span style={s}>🖼️</span>;
+  if (type.startsWith("video/")) return <span style={s}>🎬</span>;
+  if (type.includes("pdf")) return <span style={s}>📄</span>;
+  if (type.includes("audio")) return <span style={s}>🎵</span>;
+  return <span style={s}>📎</span>;
+}
+
+function Section({ title, count, children }) {
+  return (
+    <div style={{ marginBottom: 26 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 16, color: "#ffc04a" }}>
+        {title}
+        <span style={{ background: "rgba(255,140,0,0.2)", borderRadius: 50, padding: "1px 10px", fontSize: 12, color: "#ff8c00" }}>{count}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function FileRow({ file, onClick }) {
+  return (
+    <div className="card-hover" onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 12, background: "rgba(255,140,0,0.05)", border: "1px solid rgba(255,140,0,0.15)", borderRadius: 14, padding: "12px 16px", marginBottom: 10 }}>
+      <TypeIcon type={file.type} size={24} />
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#f5e6c8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{file.name}</div>
+        <div style={{ fontSize: 12, color: "#a08040", marginTop: 2 }}>{formatSize(file.size)} · {formatTime(file.ts)}</div>
+      </div>
+      <span style={{ color: "#ff8c00", fontSize: 20 }}>›</span>
+    </div>
+  );
+}
+
+export default function ShareZone() {
+  const [files, setFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [note, setNote] = useState("");
+  const [noteTitle, setNoteTitle] = useState("");
+  const [tab, setTab] = useState("home");
+  const [preview, setPreview] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [search, setSearch] = useState("");
+  const fileInputRef = useRef();
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const result = await window.storage.get(STORAGE_KEY, true);
+        if (result && result.value) setFiles(JSON.parse(result.value));
+      } catch (e) {}
+    }
+    load();
+  }, []);
+
+  async function saveFiles(newFiles) {
+    setFiles(newFiles);
+    try { await window.storage.set(STORAGE_KEY, JSON.stringify(newFiles), true); }
+    catch (e) { showToast("Storage mein problem!", "error"); }
+  }
+
+  function showToast(msg, type = "success") {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 2800);
+  }
+
+  function readFileAsBase64(file) {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function handleFiles(fileList) {
+    setUploading(true);
+    const newFiles = [...files];
+    let uploaded = 0;
+    for (const file of fileList) {
+      if (file.size > 8 * 1024 * 1024) { showToast(`${file.name} bahut bada hai (max 8MB)`, "error"); continue; }
+      const data = await readFileAsBase64(file);
+      newFiles.push({ id: Date.now() + Math.random(), name: file.name, type: file.type || "application/octet-stream", size: file.size, data, ts: Date.now(), kind: "file" });
+      uploaded++;
+    }
+    await saveFiles(newFiles);
+    setUploading(false);
+    if (uploaded > 0) { showToast(`${uploaded} file${uploaded > 1 ? "s" : ""} upload ho gaya! 🎉`); setTab("gallery"); }
+  }
+
+  async function handleAddNote() {
+    if (!note.trim() && !noteTitle.trim()) return;
+    const newFiles = [...files, { id: Date.now() + Math.random(), name: noteTitle.trim() || "Untitled Note", type: "text/note", size: note.length, data: note, ts: Date.now(), kind: "note" }];
+    await saveFiles(newFiles);
+    setNote(""); setNoteTitle("");
+    showToast("Note save ho gaya! 📝");
+    setTab("gallery");
+  }
+
+  async function deleteFile(id) {
+    await saveFiles(files.filter(f => f.id !== id));
+    setPreview(null);
+    showToast("Delete ho gaya! 🗑️");
+  }
+
+  function copyShareLink() {
+    navigator.clipboard.writeText(window.location.href).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 2500);
+      showToast("Link copy ho gaya! Group mein share karo 🔗");
+    });
+  }
+
+  const filtered = files.filter(f => f.name.toLowerCase().includes(search.toLowerCase()));
+  const images = filtered.filter(f => f.type.startsWith("image/"));
+  const videos = filtered.filter(f => f.type.startsWith("video/"));
+  const noteFiles = filtered.filter(f => f.kind === "note");
+  const others = filtered.filter(f => !f.type.startsWith("image/") && !f.type.startsWith("video/") && f.kind !== "note");
+
+  const TABS = [
+    { id: "home", label: "🏠 Home" },
+    { id: "upload", label: "⬆️ Upload" },
+    { id: "note", label: "📝 Note" },
+    { id: "gallery", label: "🗂️ Gallery" },
+  ];
+
+  return (
+    <>
+      <style>{styles}</style>
+      <div style={{ minHeight: "100vh", background: "linear-gradient(160deg, #0d0800 0%, #1a1000 50%, #100c00 100%)", color: "#f5e6c8", position: "relative", overflow: "hidden", fontFamily: "'Hind', sans-serif" }}>
+
+        {/* BG glows */}
+        <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0, background: "radial-gradient(ellipse 55% 35% at 75% 8%, rgba(255,140,0,0.09) 0%, transparent 70%), radial-gradient(ellipse 40% 25% at 15% 90%, rgba(255,60,0,0.07) 0%, transparent 60%)" }} />
+
+        {/* Toast */}
+        {toast && (
+          <div style={{ position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "#c0392b" : "#e67e00", color: "#fff", padding: "10px 26px", borderRadius: 50, fontFamily: "'Baloo 2'", fontWeight: 700, fontSize: 14, zIndex: 9999, boxShadow: "0 4px 24px rgba(255,140,0,0.4)", animation: "fadeIn .2s ease" }}>
+            {toast.msg}
+          </div>
+        )}
+
+        {/* Preview Modal */}
+        {preview && (
+          <div onClick={() => setPreview(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: "linear-gradient(145deg, #1f1500, #2a1c00)", borderRadius: 20, padding: 24, maxWidth: 520, width: "100%", border: "1.5px solid rgba(255,140,0,0.3)", boxShadow: "0 24px 80px rgba(0,0,0,0.7)", animation: "fadeIn .2s ease" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div style={{ fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 15, color: "#ffc04a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  <TypeIcon type={preview.type} size={18} /> {preview.name}
+                </div>
+                <button className="btn" onClick={() => setPreview(null)} style={{ background: "rgba(255,255,255,0.08)", color: "#f5e6c8", borderRadius: 8, padding: "4px 12px", fontSize: 18, marginLeft: 12 }}>✕</button>
+              </div>
+
+              {preview.type.startsWith("image/") && <img src={preview.data} alt={preview.name} style={{ width: "100%", borderRadius: 12, maxHeight: 360, objectFit: "contain", background: "#000" }} />}
+              {preview.type.startsWith("video/") && <video src={preview.data} controls style={{ width: "100%", borderRadius: 12, maxHeight: 320 }} />}
+              {preview.type.startsWith("audio/") && <audio src={preview.data} controls style={{ width: "100%" }} />}
+              {preview.kind === "note" && <div style={{ background: "rgba(255,140,0,0.07)", borderRadius: 12, padding: 16, fontSize: 14, lineHeight: 1.75, color: "#f5e6c8", whiteSpace: "pre-wrap", maxHeight: 320, overflowY: "auto" }}>{preview.data || "(empty)"}</div>}
+              {!preview.type.startsWith("image/") && !preview.type.startsWith("video/") && !preview.type.startsWith("audio/") && preview.kind !== "note" && (
+                <a href={preview.data} download={preview.name} style={{ display: "block", textAlign: "center", padding: "14px 0", background: "rgba(255,140,0,0.12)", borderRadius: 12, color: "#ffc04a", fontFamily: "'Baloo 2'", fontWeight: 700, textDecoration: "none" }}>⬇️ Download karo</a>
+              )}
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 18 }}>
+                <span style={{ fontSize: 12, color: "#a08040" }}>{formatTime(preview.ts)} · {preview.kind === "note" ? preview.data.length + " chars" : formatSize(preview.size)}</span>
+                <button className="btn" onClick={() => deleteFile(preview.id)} style={{ background: "rgba(255,60,60,0.15)", color: "#ff7070", borderRadius: 10, padding: "7px 16px", fontSize: 13 }}>🗑️ Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MAIN CONTENT */}
+        <div style={{ position: "relative", zIndex: 1, maxWidth: 660, margin: "0 auto", padding: "0 16px 90px" }}>
+
+          {/* HEADER */}
+          <div style={{ paddingTop: 34, paddingBottom: 18, textAlign: "center" }}>
+            <div style={{ display: "inline-block", background: "linear-gradient(135deg, #ff8c00, #ff4500)", borderRadius: 20, padding: "10px 22px", marginBottom: 14, boxShadow: "0 4px 24px rgba(255,140,0,0.35)", animation: "float 3s ease-in-out infinite" }}>
+              <span style={{ fontSize: 34 }}>📂</span>
+            </div>
+            <h1 style={{ fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 36, color: "#ffc04a", textShadow: "0 2px 20px rgba(255,140,0,0.4)", letterSpacing: -0.5 }}>ShareZone</h1>
+            <p style={{ fontSize: 13, color: "#a08040", marginTop: 4 }}>Files · Videos · Photos · Notes — ek jagah sab</p>
+
+            {/* CREATOR BADGE — PROMINENT */}
+            <div style={{ marginTop: 14, display: "inline-flex", alignItems: "center", gap: 8, background: "linear-gradient(90deg, rgba(255,140,0,0.18), rgba(255,60,0,0.12))", border: "1.5px solid rgba(255,140,0,0.4)", borderRadius: 50, padding: "8px 22px", boxShadow: "0 2px 16px rgba(255,140,0,0.2)" }}>
+              <span style={{ fontSize: 18 }}>👑</span>
+              <span style={{ fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 15, color: "#ffb030" }}>Banaya hai <span style={{ color: "#ff8c00", textDecoration: "underline" }}>{CREATOR}</span> ne</span>
+            </div>
+
+            {/* SHARE BUTTON */}
+            <div style={{ marginTop: 16 }}>
+              <button className="btn" onClick={copyShareLink} style={{ background: copied ? "linear-gradient(90deg,#22c55e,#16a34a)" : "linear-gradient(90deg,#ff8c00,#ff4500)", color: "#fff", borderRadius: 50, padding: "11px 30px", fontSize: 14, boxShadow: copied ? "0 4px 16px rgba(34,197,94,0.4)" : "0 4px 20px rgba(255,140,0,0.4)" }}>
+                {copied ? "✅ Link Copy Ho Gaya!" : "🔗 Group mein Share karo"}
+              </button>
+            </div>
+          </div>
+
+          {/* STATS */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 22 }}>
+            {[
+              { label: "Photos", count: files.filter(f => f.type.startsWith("image/")).length, icon: "🖼️", color: "#ff8c00" },
+              { label: "Videos", count: files.filter(f => f.type.startsWith("video/")).length, icon: "🎬", color: "#ff4500" },
+              { label: "Notes", count: files.filter(f => f.kind === "note").length, icon: "📝", color: "#f59e0b" },
+              { label: "Files", count: files.filter(f => !f.type.startsWith("image/") && !f.type.startsWith("video/") && f.kind !== "note").length, icon: "📎", color: "#ea580c" },
+            ].map(s => (
+              <div key={s.label} style={{ background: "rgba(255,140,0,0.06)", border: "1px solid rgba(255,140,0,0.15)", borderRadius: 14, padding: "12px 8px", textAlign: "center" }}>
+                <div style={{ fontSize: 20 }}>{s.icon}</div>
+                <div style={{ fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 24, color: s.color, lineHeight: 1.2 }}>{s.count}</div>
+                <div style={{ fontSize: 11, color: "#a08040" }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* TABS */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 22, overflowX: "auto", paddingBottom: 4 }}>
+            {TABS.map(t => (
+              <button key={t.id} className="btn" onClick={() => setTab(t.id)} style={{ background: tab === t.id ? "linear-gradient(90deg,#ff8c00,#ff4500)" : "rgba(255,140,0,0.07)", color: tab === t.id ? "#fff" : "#a08040", border: tab === t.id ? "none" : "1px solid rgba(255,140,0,0.2)", borderRadius: 50, padding: "9px 20px", fontSize: 13, whiteSpace: "nowrap", boxShadow: tab === t.id ? "0 4px 14px rgba(255,140,0,0.3)" : "none" }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* HOME */}
+          {tab === "home" && (
+            <div className="fade-in">
+              <div style={{ background: "linear-gradient(135deg,rgba(255,140,0,0.12),rgba(255,80,0,0.06))", border: "1.5px solid rgba(255,140,0,0.25)", borderRadius: 20, padding: 24, marginBottom: 20, textAlign: "center" }}>
+                <div style={{ fontSize: 50, marginBottom: 12, animation: "float 3s ease-in-out infinite" }}>👋</div>
+                <h2 style={{ fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 22, color: "#ffc04a", marginBottom: 10 }}>Yeh hai {CREATOR} ki ShareZone!</h2>
+                <p style={{ color: "#c8a060", lineHeight: 1.75, fontSize: 14 }}>Photos, videos, notes aur files ek jagah share karo.<br />Link bhejo group mein — sab upload aur dekh sakte hain!</p>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+                {[
+                  { icon: "⬆️", title: "Upload karo", desc: "Photo, video ya koi file", action: () => setTab("upload"), color: "#ff8c00" },
+                  { icon: "📝", title: "Note likhho", desc: "Text notes save karo", action: () => setTab("note"), color: "#f59e0b" },
+                  { icon: "🗂️", title: "Gallery dekho", desc: "Saari cheezein yahan", action: () => setTab("gallery"), color: "#ff4500" },
+                  { icon: "🔗", title: "Share karo", desc: "Group ko link bhejo", action: copyShareLink, color: "#ea580c" },
+                ].map(c => (
+                  <div key={c.title} className="card-hover" onClick={c.action} style={{ background: "rgba(255,140,0,0.05)", border: "1px solid rgba(255,140,0,0.16)", borderRadius: 16, padding: "18px 14px", textAlign: "center" }}>
+                    <div style={{ fontSize: 28, marginBottom: 8 }}>{c.icon}</div>
+                    <div style={{ fontFamily: "'Baloo 2'", fontWeight: 700, fontSize: 14, color: c.color }}>{c.title}</div>
+                    <div style={{ fontSize: 11, color: "#7a5a20", marginTop: 4 }}>{c.desc}</div>
+                  </div>
+                ))}
+              </div>
+              {files.length > 0 && (
+                <div style={{ background: "rgba(255,140,0,0.05)", border: "1px solid rgba(255,140,0,0.14)", borderRadius: 16, padding: "14px 18px" }}>
+                  <div style={{ fontFamily: "'Baloo 2'", fontWeight: 700, fontSize: 14, color: "#ffc04a", marginBottom: 10 }}>🕐 Recent Uploads</div>
+                  {files.slice(-3).reverse().map(f => (
+                    <div key={f.id} className="card-hover" onClick={() => setPreview(f)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(255,140,0,0.08)" }}>
+                      <TypeIcon type={f.type} size={20} />
+                      <div style={{ flex: 1, overflow: "hidden" }}>
+                        <div style={{ fontSize: 13, color: "#f5e6c8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</div>
+                        <div style={{ fontSize: 11, color: "#a08040" }}>{formatTime(f.ts)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* UPLOAD */}
+          {tab === "upload" && (
+            <div className="fade-in">
+              <div className="card-hover"
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+                onClick={() => fileInputRef.current?.click()}
+                style={{ border: `2.5px dashed ${dragOver ? "#ff8c00" : "rgba(255,140,0,0.3)"}`, borderRadius: 22, padding: "44px 24px", textAlign: "center", background: dragOver ? "rgba(255,140,0,0.11)" : "rgba(255,140,0,0.03)", transition: "all 0.2s", cursor: "pointer", marginBottom: 20 }}>
+                <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={e => handleFiles(e.target.files)} />
+                {uploading ? (
+                  <>
+                    <div style={{ fontSize: 42, animation: "spin 1s linear infinite", display: "inline-block" }}>⚙️</div>
+                    <p style={{ fontFamily: "'Baloo 2'", fontWeight: 700, color: "#ff8c00", marginTop: 12 }}>Upload ho raha hai...</p>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 52, animation: "float 3s ease-in-out infinite" }}>📤</div>
+                    <p style={{ fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 20, color: "#ffc04a", marginTop: 12 }}>Files yahan drop karo</p>
+                    <p style={{ color: "#a08040", fontSize: 13, marginTop: 6 }}>ya <span style={{ color: "#ff8c00", textDecoration: "underline" }}>click karke select karo</span></p>
+                    <p style={{ color: "#5a4018", fontSize: 12, marginTop: 10 }}>Photos · Videos · PDF · Audio · Koi bhi file (max 8MB)</p>
+                  </>
+                )}
+              </div>
+              <div style={{ background: "rgba(255,140,0,0.05)", border: "1px solid rgba(255,140,0,0.14)", borderRadius: 16, padding: "16px 20px" }}>
+                <div style={{ fontFamily: "'Baloo 2'", fontWeight: 700, color: "#ffc04a", marginBottom: 10, fontSize: 14 }}>💡 Tips:</div>
+                {["Photos aur videos sidha dekh sakte ho", "PDF aur documents bhi support karta hai", "Group ka koi bhi member upload kar sakta hai", "Sab shared hai — sabhi dekh aur add kar sakte hain"].map((tip, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, marginBottom: 7, fontSize: 13, color: "#c8a060" }}>
+                    <span style={{ color: "#ff8c00" }}>→</span> {tip}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* NOTE */}
+          {tab === "note" && (
+            <div className="fade-in">
+              <div style={{ background: "rgba(255,140,0,0.05)", border: "1.5px solid rgba(255,140,0,0.2)", borderRadius: 20, padding: 22 }}>
+                <div style={{ fontFamily: "'Baloo 2'", fontWeight: 800, fontSize: 20, color: "#ffc04a", marginBottom: 18 }}>📝 Note likhho</div>
+                <input value={noteTitle} onChange={e => setNoteTitle(e.target.value)} placeholder="Note ka title (optional)..." style={{ width: "100%", background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,140,0,0.22)", borderRadius: 12, padding: "12px 16px", color: "#f5e6c8", fontSize: 15, fontFamily: "'Baloo 2'", fontWeight: 600, marginBottom: 12, outline: "none" }} />
+                <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Yahan kuch bhi likho — class notes, reminder, important baatein..." rows={7} style={{ width: "100%", background: "rgba(255,255,255,0.03)", border: "1.5px solid rgba(255,140,0,0.18)", borderRadius: 12, padding: "14px 16px", color: "#f5e6c8", fontSize: 14, fontFamily: "'Hind'", lineHeight: 1.7, resize: "vertical", outline: "none", marginBottom: 16 }} />
+                <button className="btn" onClick={handleAddNote} disabled={!note.trim() && !noteTitle.trim()} style={{ width: "100%", padding: "14px 0", borderRadius: 14, background: "linear-gradient(90deg,#ff8c00,#ff4500)", color: "#fff", fontSize: 16, opacity: (!note.trim() && !noteTitle.trim()) ? 0.45 : 1, boxShadow: "0 4px 16px rgba(255,140,0,0.35)" }}>
+                  💾 Note Save Karo
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* GALLERY */}
+          {tab === "gallery" && (
+            <div className="fade-in">
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search karo..." style={{ width: "100%", background: "rgba(255,255,255,0.04)", border: "1.5px solid rgba(255,140,0,0.2)", borderRadius: 50, padding: "12px 20px", color: "#f5e6c8", fontSize: 14, fontFamily: "'Hind'", outline: "none", marginBottom: 20 }} />
+              {files.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "55px 0", color: "#6a5030" }}>
+                  <div style={{ fontSize: 54, marginBottom: 12 }}>🌚</div>
+                  <div style={{ fontFamily: "'Baloo 2'", fontWeight: 700, fontSize: 16 }}>Abhi kuch nahi hai</div>
+                  <div style={{ fontSize: 13, marginTop: 6 }}>Upload tab pe jao aur kuch daalo!</div>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#6a5030" }}>
+                  <div style={{ fontSize: 36 }}>🔍</div>
+                  <div style={{ marginTop: 8, fontSize: 14 }}>Koi result nahi mila</div>
+                </div>
+              ) : (
+                <>
+                  {images.length > 0 && (
+                    <Section title="🖼️ Photos" count={images.length}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                        {images.map(f => (
+                          <div key={f.id} className="card-hover" onClick={() => setPreview(f)} style={{ borderRadius: 12, overflow: "hidden", aspectRatio: "1", border: "1px solid rgba(255,140,0,0.2)" }}>
+                            <img src={f.data} alt={f.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          </div>
+                        ))}
+                      </div>
+                    </Section>
+                  )}
+                  {videos.length > 0 && (
+                    <Section title="🎬 Videos" count={videos.length}>
+                      {videos.map(f => <FileRow key={f.id} file={f} onClick={() => setPreview(f)} />)}
+                    </Section>
+                  )}
+                  {noteFiles.length > 0 && (
+                    <Section title="📝 Notes" count={noteFiles.length}>
+                      {noteFiles.map(f => (
+                        <div key={f.id} className="card-hover" onClick={() => setPreview(f)} style={{ background: "rgba(255,140,0,0.05)", borderRadius: 14, padding: "14px 16px", marginBottom: 10, border: "1px solid rgba(255,140,0,0.15)" }}>
+                          <div style={{ fontFamily: "'Baloo 2'", fontWeight: 700, fontSize: 14, color: "#ffc04a", marginBottom: 6 }}>📝 {f.name}</div>
+                          <div style={{ fontSize: 13, color: "#c8a060", lineHeight: 1.5, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{f.data || "(empty)"}</div>
+                          <div style={{ fontSize: 11, color: "#7a5a20", marginTop: 8 }}>{formatTime(f.ts)}</div>
+                        </div>
+                      ))}
+                    </Section>
+                  )}
+                  {others.length > 0 && (
+                    <Section title="📎 Other Files" count={others.length}>
+                      {others.map(f => <FileRow key={f.id} file={f} onClick={() => setPreview(f)} />)}
+                    </Section>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* FOOTER — Ramjeet ka naam */}
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "linear-gradient(0deg, #0d0800 75%, transparent)", padding: "16px 0 12px", textAlign: "center", zIndex: 10 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(255,140,0,0.10)", border: "1px solid rgba(255,140,0,0.22)", borderRadius: 50, padding: "7px 22px" }}>
+            <span style={{ fontSize: 14 }}>⚡</span>
+            <span style={{ fontFamily: "'Baloo 2'", fontWeight: 700, fontSize: 12, color: "#a08040" }}>
+              Made with ❤️ by <span style={{ color: "#ff8c00", fontSize: 13 }}>{CREATOR}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
